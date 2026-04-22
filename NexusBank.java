@@ -32,29 +32,136 @@ public class NexusBank {
         Transaction(String dt,String f,String t,double a,String tp,String d){
             date=dt;from=f;to=t;amount=a;type=tp;desc=d;}
     }
+
+    // --- SupabaseService ---
+    static class SupabaseService {
+        private final String BASE_URL = "https://wwnabotcvzwzawejpnem.supabase.co/rest/v1";
+        private final String API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3bmFib3Rjdnp3emF3ZWpwbmVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4Mzk1OTUsImV4cCI6MjA5MjQxNTU5NX0.t9OOzdBUiWbp4MPPq3sKi1ItNBAVEPde0PD8pbambHw";
+
+        private java.net.HttpURLConnection getConnection(String endpoint, String method) throws Exception {
+            java.net.URL url = new java.net.URL(BASE_URL + endpoint);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setRequestMethod(method);
+            conn.setRequestProperty("apikey", API_KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + API_KEY);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Prefer", "return=representation");
+            return conn;
+        }
+
+        public List<Account> fetchAccounts() {
+            List<Account> list = new ArrayList<>();
+            try {
+                java.net.HttpURLConnection conn = getConnection("/accounts", "GET");
+                java.util.Scanner scanner = new java.util.Scanner(conn.getInputStream());
+                String response = scanner.useDelimiter("\\A").hasNext() ? scanner.next() : "";
+                scanner.close();
+                response = response.trim();
+                if (response.startsWith("[")) response = response.substring(1, response.length() - 1);
+                String[] objects = response.split("\\},\\{");
+                for (String obj : objects) {
+                    if (obj.trim().isEmpty()) continue;
+                    obj = obj.replace("{", "").replace("}", "");
+                    String id = extractStr(obj, "id");
+                    String owner = extractStr(obj, "owner");
+                    String type = extractStr(obj, "type");
+                    double balance = Double.parseDouble(extractNum(obj, "balance"));
+                    String city = extractStr(obj, "city");
+                    String status = extractStr(obj, "status");
+                    Account acc = new Account(id, owner, type, balance, city);
+                    if (status != null && !status.isEmpty()) acc.status = status;
+                    list.add(acc);
+                }
+            } catch (Exception e) { e.printStackTrace(); }
+            return list;
+        }
+
+        public List<Transaction> fetchTransactions() {
+            List<Transaction> list = new ArrayList<>();
+            try {
+                java.net.HttpURLConnection conn = getConnection("/transactions", "GET");
+                java.util.Scanner scanner = new java.util.Scanner(conn.getInputStream());
+                String response = scanner.useDelimiter("\\A").hasNext() ? scanner.next() : "";
+                scanner.close();
+                response = response.trim();
+                if (response.startsWith("[")) response = response.substring(1, response.length() - 1);
+                String[] objects = response.split("\\},\\{");
+                for (String obj : objects) {
+                    if (obj.trim().isEmpty()) continue;
+                    obj = obj.replace("{", "").replace("}", "");
+                    String date = extractStr(obj, "date");
+                    String from = extractStr(obj, "from_account");
+                    String to = extractStr(obj, "to_account");
+                    double amount = Double.parseDouble(extractNum(obj, "amount"));
+                    String type = extractStr(obj, "type");
+                    String desc = extractStr(obj, "description");
+                    list.add(new Transaction(date, from, to, amount, type, desc));
+                }
+            } catch (Exception e) { e.printStackTrace(); }
+            return list;
+        }
+
+        public void insertAccount(Account acc) {
+            try {
+                java.net.HttpURLConnection conn = getConnection("/accounts", "POST");
+                conn.setDoOutput(true);
+                String json = String.format("{\"id\":\"%s\",\"owner\":\"%s\",\"type\":\"%s\",\"balance\":%f,\"city\":\"%s\",\"status\":\"%s\"}",
+                        acc.id, acc.owner, acc.type, acc.balance, acc.city, acc.status);
+                try (java.io.OutputStream os = conn.getOutputStream()) { os.write(json.getBytes()); os.flush(); }
+                conn.getResponseCode();
+            } catch (Exception e) { e.printStackTrace(); }
+        }
+
+        public void updateBalance(String accountId, double newBalance) {
+            try {
+                java.net.HttpURLConnection conn = getConnection("/accounts?id=eq." + accountId, "PATCH");
+                conn.setDoOutput(true);
+                String json = String.format("{\"balance\":%f}", newBalance);
+                try (java.io.OutputStream os = conn.getOutputStream()) { os.write(json.getBytes()); os.flush(); }
+                conn.getResponseCode();
+            } catch (Exception e) { e.printStackTrace(); }
+        }
+
+        public void insertTransaction(Transaction t) {
+            try {
+                java.net.HttpURLConnection conn = getConnection("/transactions", "POST");
+                conn.setDoOutput(true);
+                String json = String.format("{\"date\":\"%s\",\"from_account\":\"%s\",\"to_account\":\"%s\",\"amount\":%f,\"type\":\"%s\",\"description\":\"%s\"}",
+                        t.date, t.from, t.to, t.amount, t.type, t.desc);
+                try (java.io.OutputStream os = conn.getOutputStream()) { os.write(json.getBytes()); os.flush(); }
+                conn.getResponseCode();
+            } catch (Exception e) { e.printStackTrace(); }
+        }
+
+        private String extractStr(String json, String key) {
+            int idx = json.indexOf("\"" + key + "\":");
+            if (idx == -1) return "";
+            int start = json.indexOf("\"", idx + key.length() + 2);
+            if (start == -1) return "";
+            int end = json.indexOf("\"", start + 1);
+            if (end == -1) return "";
+            return json.substring(start + 1, end);
+        }
+
+        private String extractNum(String json, String key) {
+            int idx = json.indexOf("\"" + key + "\":");
+            if (idx == -1) return "0";
+            int start = idx + key.length() + 2;
+            int end = json.indexOf(",", start);
+            if (end == -1) end = json.length();
+            return json.substring(start, end).trim();
+        }
+    }
     // --- DataStore ---
     static class DataStore {
+        SupabaseService api = new SupabaseService();
         List<Account> accounts=new ArrayList<>();
         List<Transaction> txns=new ArrayList<>();
         int ctr=5;
         static final SimpleDateFormat SDF=new SimpleDateFormat("dd-MM-yyyy");
         void seed(){
-            accounts.add(new Account("ACC-001","Priya Sharma","Savings",185000.00,"Mumbai"));
-            accounts.add(new Account("ACC-002","Rahul Verma","Current",548000.50,"Delhi"));
-            accounts.add(new Account("ACC-003","Ananya Iyer","Savings",92400.75,"Bengaluru"));
-            accounts.add(new Account("ACC-004","Vikram Patel","Fixed Deposit",1240000.00,"Ahmedabad"));
-            addT(ago(1),"NEFT-IN","ACC-001",65000,"Credit","Salary Credit — Infosys Ltd");
-            addT(ago(2),"ACC-001","HDFC-LOAN",18500,"Debit","EMI Payment — Home Loan");
-            addT(ago(4),"ACC-002","ACC-001",10000,"Credit","UPI Transfer — Rahul Verma");
-            addT(ago(5),"ACC-003","BIG-BAZAAR",3240,"Debit","Grocery — Big Bazaar");
-            addT(ago(7),"NEFT-IN","ACC-003",72000,"Credit","Salary Credit — Wipro Ltd");
-            addT(ago(9),"ACC-004","ACC-002",50000,"Debit","IMPS Transfer to Current A/C");
-            addT(ago(11),"ACC-001","BESCOM",1850,"Debit","Electricity Bill — BESCOM");
-            addT(ago(14),"NEFT-IN","ACC-004",120000,"Credit","FD Interest Credit — Q1");
-            addT(ago(16),"ACC-002","LIC-PREMIUM",25000,"Debit","LIC Premium — Policy 98234");
-            addT(ago(18),"ACC-003","ACC-001",5000,"Debit","UPI — Personal Transfer");
-            addT(ago(20),"RTGS-IN","ACC-002",200000,"Credit","Client Payment — Tata Consultancy");
-            addT(ago(24),"ACC-001","SWIGGY",1120,"Debit","Swiggy Food Order");
+            accounts = api.fetchAccounts();
+            txns = api.fetchTransactions();
         }
         String ago(int d){Calendar c=Calendar.getInstance();c.add(Calendar.DAY_OF_YEAR,-d);return SDF.format(c.getTime());}
         void addT(String dt,String f,String t,double a,String tp,String d){txns.add(new Transaction(dt,f,t,a,tp,d));}
@@ -471,8 +578,15 @@ public class NexusBank {
         if(!dep&&a.balance<amt){setE(eQuick,"Insufficient balance.");return;}
         if(!dep&&!"Active".equals(a.status)){setE(eQuick,"Account is not active.");return;}
         try{String dt=DataStore.SDF.format(new Date());
-            if(dep){a.balance+=amt;ds.txns.add(0,new Transaction(dt,"CASH-DEPOSIT",id,amt,"Credit","Counter Cash Deposit"));}
-            else{a.balance-=amt;ds.txns.add(0,new Transaction(dt,id,"CASH-WITHDRAWAL",amt,"Debit","Counter Cash Withdrawal"));}
+            if(dep){
+                a.balance+=amt; ds.api.updateBalance(id, a.balance);
+                Transaction t = new Transaction(dt,"CASH-DEPOSIT",id,amt,"Credit","Counter Cash Deposit");
+                ds.txns.add(0, t); ds.api.insertTransaction(t);
+            } else {
+                a.balance-=amt; ds.api.updateBalance(id, a.balance);
+                Transaction t = new Transaction(dt,id,"CASH-WITHDRAWAL",amt,"Debit","Counter Cash Withdrawal");
+                ds.txns.add(0, t); ds.api.insertTransaction(t);
+            }
             refreshAccMdl();refreshDash();populateDetail();tfQuick.setText("");
             String op=dep?"Deposited":"Withdrew";
             status("✓  "+op+" "+inr(amt)+" "+(dep?"into":"from")+" "+id,GREEN);toast(op+": "+inr(amt)+" — "+id,GREEN);
@@ -573,11 +687,14 @@ public class NexusBank {
         final double fa=amt;final Account fs=src,fd=dst;final String fsi=si,fdi=di;
         btnXfer.setEnabled(false);btnXfer.setText("  Processing\u2026  ");
         new javax.swing.Timer(520,e->{
-            try{fs.balance-=fa;fd.balance+=fa;
+            try{fs.balance-=fa; ds.api.updateBalance(fsi, fs.balance);
+                fd.balance+=fa; ds.api.updateBalance(fdi, fd.balance);
                 String d=tfDesc.getText().trim().isEmpty()?"IMPS Transfer":tfDesc.getText().trim();
                 String dt=DataStore.SDF.format(new Date());
-                ds.txns.add(0,new Transaction(dt,fsi,fdi,fa,"Credit",d));
-                ds.txns.add(1,new Transaction(dt,fsi,fdi,fa,"Debit",d));
+                Transaction t1 = new Transaction(dt,fsi,fdi,fa,"Credit",d);
+                Transaction t2 = new Transaction(dt,fsi,fdi,fa,"Debit",d);
+                ds.txns.add(0, t1); ds.api.insertTransaction(t1);
+                ds.txns.add(1, t2); ds.api.insertTransaction(t2);
                 refreshAccMdl();refreshTxMdl(null,null);refreshDash();syncCombos();tfAmount.setText("");tfDesc.setText("");
                 status("✓  Transfer of "+inr(fa)+" from "+fsi+" \u2192 "+fdi+" completed.",GREEN);
                 toast(inr(fa)+" credited to "+fdi,GREEN);
@@ -614,7 +731,8 @@ public class NexusBank {
         catch(Exception ex){setE(eDeposit,"Enter a valid deposit amount (\u2265 0).");ok=false;}
         if(!ok)return;
         try{String id=ds.nextId();String tp=(String)cbType.getSelectedItem();
-            ds.accounts.add(new Account(id,own,tp,dep,"India"));
+            Account newAcc = new Account(id,own,tp,dep,"India");
+            ds.accounts.add(newAcc); ds.api.insertAccount(newAcc);
             refreshAccMdl();refreshDash();syncCombos();tfOwner.setText("");tfDeposit.setText("");
             status("✓  Account "+id+" opened for "+own+" | Initial deposit: "+inr(dep),GREEN);
             toast("Account "+id+" created successfully!",GREEN);
